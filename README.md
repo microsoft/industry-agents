@@ -1,4 +1,4 @@
-# FAST - App & AI Starter Templates
+# FAST Agents - App & AI Starter Templates
 
 Welcome to FAST (App & AI Starter Templates), a collection of standardized, reusable Copilot Studio agent templates for Microsoft Power Platform, purpose-built for common business processes across industries. Each agent module defines topics, actions, knowledge sources, and integrations that align with real-world operational needs. By adopting these agents, organizations and solution builders can accelerate AI-powered conversational experiences, ensure consistency across deployments, and reduce the cost of custom development. Whether you are building support agents, process automation agents, information retrieval agents, or other conversational AI solutions, these modules provide a ready-to-use foundation that is extensible, interoperable, and maintained under an open MIT license.
 
