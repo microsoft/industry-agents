@@ -10,6 +10,22 @@
 *.userosscache
 *.sln.docstates
 *.env
+.config/*
+!.config/*-template.json
+!.config/*/environment-template.json
+!.config/README.md
+.vscode/
+.venv/
+
+# Temporary and build directories
+.temp/
+.design/
+
+# Agent-specific files
+*.bot.backup
+*.chat
+exported-agents/
+bot-exports/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -21,7 +37,7 @@ mono_crash.*
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
-[Rr]eleases/
+# [Rr]eleases/
 x64/
 x86/
 [Ww][Ii][Nn]32/
@@ -36,9 +52,6 @@ bld/
 
 # Build results on 'Bin' directories
 **/[Bb]in/*
-# Uncomment if you have tasks that rely on *.refresh files to move binaries
-# (https://github.com/github/gitignore/pull/3736)
-#!**/[Bb]in/*.refresh
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
