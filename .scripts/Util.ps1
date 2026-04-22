@@ -1,0 +1,1608 @@
+function Wait-ForFileSystemStability {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$MaxWaitSeconds = 30,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$StabilitySeconds = 5
+    )
+    
+    # Simplified: Just pause for 5 seconds to let file system settle
+    Start-Sleep -Seconds 5
+    
+    # Original verbose implementation commented out:
+    # Write-Host "Waiting for file system stability after build..."
+    # $objDebugPath = Join-Path $Path "obj\Debug"
+    # $binDebugPath = Join-Path $Path "bin\Debug"
+    # $startTime = Get-Date
+    # $lastActivity = Get-Date
+    # $stableTime = $null
+    # while ((Get-Date) -lt $startTime.AddSeconds($MaxWaitSeconds)) {
+    #     $currentActivity = $false
+    #     if (Test-Path $objDebugPath) {
+    #         $recentFiles = Get-ChildItem -Path $objDebugPath -Recurse -File -ErrorAction SilentlyContinue | 
+    #                       Where-Object { $_.LastWriteTime -gt (Get-Date).AddSeconds(-2) }
+    #         if ($recentFiles) {
+    #             $currentActivity = $true
+    #             $lastActivity = Get-Date
+    #             $stableTime = $null
+    #         }
+    #     }
+    #     if (Test-Path $binDebugPath) {
+    #         $recentFiles = Get-ChildItem -Path $binDebugPath -Recurse -File -ErrorAction SilentlyContinue | 
+    #                       Where-Object { $_.LastWriteTime -gt (Get-Date).AddSeconds(-2) }
+    #         if ($recentFiles) {
+    #             $currentActivity = $true
+    #             $lastActivity = Get-Date
+    #             $stableTime = $null
+    #         }
+    #     }
+    #     if (-not $currentActivity) {
+    #         if ($null -eq $stableTime) {
+    #             $stableTime = Get-Date
+    #             Write-Host "File system activity stopped, waiting for stability..." -ForegroundColor Yellow
+    #         } elseif ((Get-Date) -gt $stableTime.AddSeconds($StabilitySeconds)) {
+    #             Write-Host "File system is stable. Proceeding..." -ForegroundColor Green
+    #             return
+    #         }
+    #     }
+    #     Start-Sleep -Milliseconds 500
+    #     Write-Host "." -NoNewline -ForegroundColor Gray
+    # }
+    # Write-Host ""
+    # Write-Host "File system stability timeout reached. Proceeding with caution..." -ForegroundColor Yellow
+}
+
+function Test-FileInUse {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+    
+    if (-not (Test-Path $FilePath)) {
+        return $false
+    }
+    
+    try {
+        $fileStream = [System.IO.File]::Open($FilePath, 'Open', 'Write')
+        $fileStream.Close()
+        $fileStream.Dispose()
+        return $false
+    }
+    catch {
+        return $true
+    }
+}
+
+function Get-FileUsingProcesses {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+    
+    # Simplified: Don't output verbose process information unless debugging
+    # Original implementation commented out to reduce noise:
+    # try {
+    #     if (Get-Command "handle" -ErrorAction SilentlyContinue) {
+    #         $handleOutput = & handle $FilePath 2>$null
+    #         if ($handleOutput) {
+    #             Write-Host "Processes using the file:" -ForegroundColor Cyan
+    #             $handleOutput | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+    #             return
+    #         }
+    #     }
+    #     $suspectProcesses = @("Code", "CodeHelper", "dotnet", "MSBuild", "codeql", "defender")
+    #     $runningProcesses = Get-Process | Where-Object { 
+    #         $suspectProcesses -contains $_.ProcessName 
+    #     } | Select-Object ProcessName, Id, CPU
+    #     if ($runningProcesses) {
+    #         Write-Host "Suspect processes that might be locking files:" -ForegroundColor Cyan
+    #         $runningProcesses | ForEach-Object { 
+    #             Write-Host "  $($_.ProcessName) (PID: $($_.Id))" -ForegroundColor Gray 
+    #         }
+    #     }
+    # }
+    # catch {
+    #     Write-Host "Could not determine which processes are using the file." -ForegroundColor Gray
+    # }
+}
+
+function Invoke-PythonFunction {
+    param (
+
+        [Parameter(Mandatory = $true)]
+        [string]$FunctionName,
+
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [object[]]$Arguments
+    )
+
+    # Example 1: Invoke-PythonFunction -FunctionName "test" -Arguments "Hi"
+    # Example 2: Invoke-PythonFunction -FunctionName "add" -Arguments 2, 3
+
+    $pythonScriptPath = "$PSScriptRoot\util.py"
+    $pythonCommand = "python ""$pythonScriptPath"" ""$FunctionName"""
+
+    foreach ($arg in $Arguments) {
+        if ($arg -is [string]) {
+            $pythonCommand += " ""$arg"""
+        }
+        elseif ($arg -is [int] -or $arg -is [double] -or $arg -is [decimal]) {
+            $pythonCommand += " $arg"
+        }
+        else {
+            throw "Unsupported argument type: $($arg.GetType().Name)"
+        }
+    }
+
+    Invoke-Expression -Command $pythonCommand
+}
+
+function Select-ItemFromList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$choices
+    )
+
+    # Helper function to format a choice with a leading number
+    function Format-Choice {
+        param([int]$index, [string]$choice)
+        return "{0}. {1}" -f ($index + 1), $choice
+    }
+
+    # Determine the max length for formatting each column
+    $maxChoiceLength = ($choices | Measure-Object -Property Length -Maximum).Maximum
+    $columnWidth = [Math]::Max($maxChoiceLength + 5, 30)  # Ensures minimum width
+
+    # Display the choices to the user
+    Write-Host "Please select an item:"
+    for ($i = 0; $i -lt $choices.Count; $i += 2) {
+        $firstChoice = Format-Choice $i $choices[$i]
+        $secondChoice = if ($i + 1 -lt $choices.Count) { Format-Choice ($i + 1) $choices[$i + 1] } else { "" }
+        
+        # Write both choices in a single line with aligned columns
+        Write-Host ("{0,-$columnWidth} {1}" -f $firstChoice, $secondChoice)
+    }
+
+    # Get the user's selection
+    do {
+        $selection = Read-Host "`nEnter selection"
+        if ($selection -notin 1..$choices.Count) {
+            Write-Host "Invalid selection, please try again."
+        }
+    } while ($selection -notin 1..$choices.Count)
+
+    # Return the selected item
+    return $choices[$selection - 1]
+}
+
+function Select-ModuleType {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$projectRoot
+    )
+
+    # All modules are now organized in category folders
+    # This function is deprecated - use Get-AllModulePaths instead
+    Write-Host "Working with categorized modules..." -ForegroundColor Cyan
+    return "categories"
+}
+
+function Get-ModuleCategories {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$projectRoot
+    )
+    
+    # Discover category folders by looking for directories that contain .cdsproj files
+    $excludeFolders = @('__pycache__', '.scripts', '.config', '.git', '.vscode', 'bin', 'obj')
+    
+    $categories = Get-ChildItem -Path $projectRoot -Directory -Exclude $excludeFolders |
+        Where-Object {
+            # Check if this directory contains subdirectories with .cdsproj files
+            $hasModules = Get-ChildItem -Path $_.FullName -Directory -ErrorAction SilentlyContinue |
+                Where-Object { (Get-ChildItem -Path $_.FullName -Filter '*.cdsproj' -ErrorAction SilentlyContinue).Count -gt 0 }
+            return ($hasModules.Count -gt 0)
+        }
+    
+    return $categories | Select-Object -ExpandProperty Name
+}
+
+function Get-AllModulePaths {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$projectRoot
+    )
+    
+    # Returns hashtable with module paths as "category/module-name"
+    $excludeFolders = @('__pycache__', '.scripts', '.config', '.git', '.vscode', 'bin', 'obj')
+    $modules = @{}
+    
+    # Get all category folders
+    $categories = Get-ModuleCategories -projectRoot $projectRoot
+    
+    foreach ($category in $categories) {
+        $categoryPath = Join-Path $projectRoot $category
+        $categoryModules = Get-ChildItem -Path $categoryPath -Directory -Exclude $excludeFolders |
+            Where-Object {
+                # Verify this is actually a module by checking for .cdsproj file
+                (Get-ChildItem -Path $_.FullName -Filter '*.cdsproj' -ErrorAction SilentlyContinue).Count -gt 0
+            }
+        
+        foreach ($module in $categoryModules) {
+            $moduleKey = "$category/$($module.Name)"
+            $modules[$moduleKey] = $module.FullName
+        }
+    }
+    
+    return $modules
+}
+
+function Select-Environment {
+    param(
+        [string]$envKey = $null
+    )
+
+    if (-not $envKey) {
+        Write-Host ""
+        # $envKey = Read-Host "Enter target environment key (from env_config.json)"
+
+        # Read and parse JSON file
+        $filePath = "${PSScriptRoot}\..\env_config.json"
+        $jsonContent = Get-Content -Path $filePath | ConvertFrom-Json
+
+        # Display the top-level keys as a numbered list
+        $keys = $jsonContent.PSObject.Properties.Name
+        Write-Host "Select an environment:"
+        for ($i = 0; $i -lt $keys.Count; $i++) {
+            Write-Host ("{0}. {1}" -f ($i + 1), $keys[$i])
+        }
+
+        # Allow user to select an item
+        $selectedIndex = -1
+        while ($selectedIndex -lt 0 -or $selectedIndex -ge $keys.Count) {
+            Write-Host ""
+            $input = Read-Host "Enter selection"
+            # Convert to 0-based index
+            $selectedIndex = $input - 1
+
+            if ($selectedIndex -lt 0 -or $selectedIndex -ge $keys.Count) {
+                Write-Host "Invalid choice. Please enter a number between 1 and $($keys.Count)."
+            }
+        }
+
+        $envKey = $keys[$selectedIndex]
+    }
+
+    $envConfig = Get-EnvironmentConfiguration $envKey
+    Write-Host "Connecting..."
+    $authSelect = pac auth select -n $envConfig.AuthProfile
+    Write-Host $authSelect
+    $pacOutput = pac org select --environment $envConfig.Url | Tee-Object -Variable pacOutput
+    Write-Host $pacOutput
+    return $envKey
+}
+
+function Update-SolutionPublisherName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$newDescription
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Find the specific LocalizedName element
+    $element = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/Publisher/LocalizedNames/LocalizedName")
+
+    # Replace the description attribute
+    if ($null -ne $element) {
+        $element.description = $newDescription
+    }
+
+    # Also update the Publisher Description element
+    $descElement = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/Publisher/Descriptions/Description")
+    if ($null -ne $descElement) {
+        $descElement.description = $newDescription
+    }
+
+    # Save the modified XML back to the file
+    $xmlContent.Save($xmlFilePath)
+
+}
+
+function Update-SolutionName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$newDescription
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Find the specific LocalizedName element
+    $element = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/LocalizedNames/LocalizedName")
+
+    # Replace the description attribute
+    if ($null -ne $element) {
+        $element.description = $newDescription
+    }
+
+    # Save the modified XML back to the file
+    $xmlContent.Save($xmlFilePath)
+
+}
+
+function Update-SolutionUniqueName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$newValue
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Find the specific LocalizedName element
+    $element = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/UniqueName")
+
+    # Replace the description attribute
+    if ($null -ne $element) {
+        $element.InnerText = $newValue
+    }
+
+    # Save the modified XML back to the file
+    $xmlContent.Save($xmlFilePath)
+}
+
+function Remove-UnmanagedSolution {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$solutionName
+    )
+
+    $solutionUniqueName = ${PSScriptRoot} -replace "-", ""
+
+    Update-SolutionUniqueName "${solutionUniqueName}_delete"
+    Deploy-Solution $PSScriptRoot -Managed
+    pac solution delete --solution-name "${solutionUniqueName}"
+    pac solution delete --solution-name "${solutionUniqueName}_delete"
+    Update-SolutionUniqueName "${solutionUniqueName}"
+}
+
+function Update-SolutionProjectManaged {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Get the default namespace
+    $namespace = $xmlContent.DocumentElement.NamespaceURI
+
+    # Create the new elements in the default namespace
+    $propertyGroup = $xmlContent.CreateElement('PropertyGroup', $namespace)
+    $solutionPackageType = $xmlContent.CreateElement('SolutionPackageType', $namespace)
+    $solutionPackageType.InnerText = 'Both'
+    $solutionPackageEnableLocalization = $xmlContent.CreateElement('SolutionPackageEnableLocalization', $namespace)
+    $solutionPackageEnableLocalization.InnerText = 'false'
+
+    # Add the new elements to the PropertyGroup
+    $propertyGroup.AppendChild($solutionPackageType) | Out-Null
+    $propertyGroup.AppendChild($solutionPackageEnableLocalization) | Out-Null
+
+    # Add the PropertyGroup to the Project (root element)
+    $xmlContent.DocumentElement.AppendChild($propertyGroup) | Out-Null
+
+    # Save the modified XML back to the file
+    $xmlContent.Save($xmlFilePath)
+
+}
+
+function Read-SolutionVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Find the specific LocalizedName element
+    $element = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/Version")
+
+    return $element.InnerText
+}
+
+function Update-SolutionVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$xmlFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$newVersion
+    )
+
+    # Load the XML file
+    [xml]$xmlContent = Get-Content $xmlFilePath
+
+    # Find the specific LocalizedName element
+    $element = $xmlContent.SelectSingleNode("/ImportExportXml/SolutionManifest/Version")
+
+    # Replace the description attribute
+    if ($null -ne $element) {
+        $element.InnerText = $newVersion
+    }
+
+    # Save the modified XML back to the file
+    $xmlContent.Save($xmlFilePath)
+
+}
+
+function Get-EnvironmentConfiguration {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$environmentKey
+    )
+    # Define the path to your JSON file
+    $jsonFilePath = "${PSScriptRoot}\..\env_config.json"
+
+    # Load the JSON file
+    $jsonContent = Get-Content $jsonFilePath | ConvertFrom-Json
+
+    # Retrieve the username and creds for the specified environment
+    $authProfile = $jsonContent.$environmentKey.authprofile
+    $username = $jsonContent.$environmentKey.username
+    $cred = $jsonContent.$environmentKey.cred
+    $url = $jsonContent.$environmentKey.resource
+    $fullDomain = $jsonContent.$environmentKey.domain
+    $domain = $fullDomain -ireplace ".onmicrosoft.com", ""
+
+    if (-not [string]::IsNullOrEmpty($cred)) {
+        $secureCred = ConvertTo-SecureString $cred -Force -AsPlainText
+    }
+    
+    # Create and return a custom object with the username and creds
+    $result = New-Object -Type PSObject
+    $result | Add-Member -Type NoteProperty -Name AuthProfile -Value $authProfile
+    $result | Add-Member -Type NoteProperty -Name Username -Value $username
+
+    if (-not [string]::IsNullOrEmpty($cred)) {
+        $result | Add-Member -Type NoteProperty -Name Cred -Value $secureCred
+    }
+    $result | Add-Member -Type NoteProperty -Name Url -Value $url
+    $result | Add-Member -Type NoteProperty -Name FullDomain -Value $fullDomain
+    $result | Add-Member -Type NoteProperty -Name Domain -Value $domain
+
+    return $result
+    # # Output the username and creds
+    # Write-Host "Username: $username"
+    # Write-Host "Cred: $cred"
+
+}
+
+function Confirm-Next {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    Write-Host ""
+    $confirm = Read-Host $Text
+    if ($confirm -eq "y") {
+        return $true
+    }
+    return $false
+}
+
+function Clear-BuildDirectories {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionPath
+    )
+    
+    $objDebugPath = Join-Path $SolutionPath "obj\Debug"
+    $binDebugPath = Join-Path $SolutionPath "bin\Debug"
+    
+    Write-Host "Ensuring build directories are not locked by background processes..."
+    
+    # Function to safely remove directory with retry logic
+    function Remove-DirectoryWithRetry {
+        param([string]$Path, [string]$Name)
+        
+        if (-not (Test-Path $Path)) {
+            return
+        }
+        
+        $maxRetries = 5
+        $retryCount = 0
+        
+        while ($retryCount -lt $maxRetries) {
+            try {
+                # First, try to unlock any locked files by checking processes
+                if ($retryCount -eq 0) {
+                    Get-FileUsingProcesses $Path
+                }
+                
+                # Try to make all files writable
+                Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | 
+                    ForEach-Object { 
+                        try { 
+                            $_.Attributes = $_.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly) 
+                        } catch { }
+                    }
+                
+                # Attempt to remove the directory
+                Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+                Write-Host "Successfully cleared $Name directory." -ForegroundColor Green
+                return
+            }
+            catch {
+                $retryCount++
+                if ($retryCount -ge $maxRetries) {
+                    Write-Host "Warning: Could not clear $Name directory after $maxRetries attempts. Build may fail." -ForegroundColor Yellow
+                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
+                    return
+                }
+                else {
+                    $waitTime = 2 + ($retryCount * 2) # 2s, 4s, 6s, 8s
+                    Write-Host "Failed to clear $Name directory (attempt $retryCount of $maxRetries). Waiting $waitTime seconds..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $waitTime
+                }
+            }
+        }
+    }
+    
+    # Only try to clear obj\Debug - bin\Debug will be recreated by build
+    Remove-DirectoryWithRetry $objDebugPath "obj\Debug"
+}
+
+function Build-Solution {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionPath,
+        
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Debug', 'Release')]
+        [string]$Configuration = 'Debug'
+    )
+
+    $originalDir = Get-Location
+    Set-Location $SolutionPath
+    
+    Write-Host "Building solution in $Configuration mode..." -ForegroundColor Cyan
+    
+    # Pre-build cleanup to ensure directories are not locked
+    Clear-BuildDirectories $SolutionPath
+    
+    # Try build with retry logic for file lock issues
+    $maxRetries = 3
+    $retryCount = 0
+    $buildSuccessful = $false
+    
+    while (-not $buildSuccessful -and $retryCount -lt $maxRetries) {
+        try {
+            if ($retryCount -gt 0) {
+                Write-Host "Retrying build (attempt $($retryCount + 1) of $maxRetries)..." -ForegroundColor Yellow
+                # Clean up again before retry
+                Clear-BuildDirectories $SolutionPath
+            }
+            
+            # Build with properties to make MSBuild more resilient to file locks
+            dotnet build --configuration $Configuration --verbosity minimal --property:DisableOutOfProcTaskHost=true --property:UseSharedCompilation=false
+            
+            $buildSuccessful = $true
+            Write-Host "Build completed successfully." -ForegroundColor Green
+        }
+        catch {
+            $retryCount++
+            if ($retryCount -ge $maxRetries) {
+                Write-Host "Build failed after $maxRetries attempts. Error: $($_.Exception.Message)" -ForegroundColor Red
+                
+                # Try one final manual cleanup if build keeps failing
+                Write-Host "Attempting manual cleanup of locked directories..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 5
+                Clear-BuildDirectories $SolutionPath
+                
+                # One final build attempt with different settings
+                try {
+                    Write-Host "Final build attempt with different MSBuild settings..." -ForegroundColor Yellow
+                    dotnet build --configuration $Configuration --verbosity quiet --property:DisableOutOfProcTaskHost=true --property:UseSharedCompilation=false --property:BuildInParallel=false
+                    $buildSuccessful = $true
+                    Write-Host "Build completed successfully on final attempt." -ForegroundColor Green
+                }
+                catch {
+                    Write-Host "Final build attempt failed. This appears to be a persistent file locking issue." -ForegroundColor Red
+                    Write-Host "Recommendation: Close VS Code, wait 2-3 minutes for background processes to finish, then try again." -ForegroundColor Yellow
+                    throw
+                }
+            }
+            else {
+                $waitTime = 5 + ($retryCount * 3) # 5s, 8s, 11s
+                Write-Host "Build failed (attempt $retryCount of $maxRetries). Waiting $waitTime seconds before retry..." -ForegroundColor Yellow
+                Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
+                Start-Sleep -Seconds $waitTime
+            }
+        }
+    }
+    
+    # Wait for background processes to release file locks after successful build
+    if ($buildSuccessful) {
+        Wait-ForFileSystemStability $SolutionPath
+    }
+    
+    Set-Location $originalDir
+}
+
+function Deploy-Solution {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionPath,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$Managed,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$SkipBuild,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$AutoConfirm,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$Upgrade,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$SettingsFile
+    )
+
+    $cdsprojFile = Get-ChildItem -Path $SolutionPath -Filter *.cdsproj | Select-Object -First 1
+    $Name = $cdsprojFile.BaseName
+    
+    # Get the unique name from Solution.xml for upgrade operations
+    $solutionXmlPath = Join-Path $SolutionPath "src\Other\Solution.xml"
+    $uniqueName = $Name
+    if (Test-Path $solutionXmlPath) {
+        [xml]$solutionXml = Get-Content $solutionXmlPath
+        $xmlUniqueName = $solutionXml.ImportExportXml.SolutionManifest.UniqueName
+        if ($xmlUniqueName) {
+            $uniqueName = $xmlUniqueName
+            Write-Host "Using solution unique name from Solution.xml: $uniqueName" -ForegroundColor Gray
+        }
+    }
+    
+    $managedSuffix = ""
+    if ($Managed -eq $true) {
+        $managedSuffix = "_managed"
+    }
+
+    if ($AutoConfirm -eq $false) {
+        Write-Host ""
+        $confirm = Read-Host "Deploy ${Name} solution?"
+        if ($confirm -ne "y") {
+            return
+        }
+    }
+
+    $path = "bin\debug\${Name}${managedSuffix}.zip"
+
+    $originalDir = Get-Location
+    Set-Location $SolutionPath
+
+    if ($SkipBuild -eq $false) {
+        # Pre-build cleanup to ensure directories are not locked
+        Clear-BuildDirectories $SolutionPath
+        
+        # Try build with retry logic for file lock issues
+        $maxBuildRetries = 3
+        $buildRetryCount = 0
+        $buildSuccessful = $false
+        
+        while (-not $buildSuccessful -and $buildRetryCount -lt $maxBuildRetries) {
+            try {
+                if ($buildRetryCount -gt 0) {
+                    Write-Host "Retrying build (attempt $($buildRetryCount + 1) of $maxBuildRetries)..." -ForegroundColor Yellow
+                    # Clean up again before retry
+                    Clear-BuildDirectories $SolutionPath
+                }
+                
+                # Build with properties to make MSBuild more resilient to file locks
+                dotnet build --verbosity minimal --property:DisableOutOfProcTaskHost=true --property:UseSharedCompilation=false
+                
+                $buildSuccessful = $true
+                Write-Host "Build completed successfully." -ForegroundColor Green
+            }
+            catch {
+                $buildRetryCount++
+                if ($buildRetryCount -ge $maxBuildRetries) {
+                    Write-Host "Build failed after $maxBuildRetries attempts." -ForegroundColor Red
+                    
+                    # Try one final manual cleanup if build keeps failing
+                    Write-Host "Attempting manual cleanup of locked directories..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 5
+                    Clear-BuildDirectories $SolutionPath
+                    
+                    # One final build attempt with different settings
+                    try {
+                        Write-Host "Final build attempt with different MSBuild settings..." -ForegroundColor Yellow
+                        dotnet build --verbosity quiet --property:DisableOutOfProcTaskHost=true --property:UseSharedCompilation=false --property:BuildInParallel=false
+                        $buildSuccessful = $true
+                        Write-Host "Build completed successfully on final attempt." -ForegroundColor Green
+                    }
+                    catch {
+                        Write-Host "Final build attempt failed. This appears to be a persistent file locking issue." -ForegroundColor Red
+                        Write-Host "Recommendation: Close VS Code, wait 2-3 minutes for background processes to finish, then try again." -ForegroundColor Yellow
+                        throw
+                    }
+                }
+                else {
+                    $waitTime = 5 + ($buildRetryCount * 3) # 5s, 8s, 11s
+                    Write-Host "Build failed (attempt $buildRetryCount of $maxBuildRetries). Waiting $waitTime seconds before retry..." -ForegroundColor Yellow
+                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
+                    Start-Sleep -Seconds $waitTime
+                }
+            }
+        }
+        
+        # Wait for file system stability after successful build
+        if ($buildSuccessful) {
+            Wait-ForFileSystemStability $SolutionPath
+        }
+    }
+
+    # Check if solution file is accessible before attempting import
+    $solutionFile = Join-Path $SolutionPath $path
+    
+    if (-not $Upgrade) {
+        # Standard import with retry logic for file locking issues
+        $maxRetries = 5
+        $retryCount = 0
+        $importSuccessful = $false
+        
+        while (-not $importSuccessful -and $retryCount -lt $maxRetries) {
+            # Check if the solution file is in use
+            if (Test-FileInUse $solutionFile) {
+                # Silently retry with increasing delays (reduced verbosity)
+                # Write-Host "Solution file is currently in use by another process (attempt $($retryCount + 1) of $maxRetries)..." -ForegroundColor Yellow
+                # if ($retryCount -eq 0) {
+                #     Get-FileUsingProcesses $solutionFile
+                # }
+                Start-Sleep -Seconds (3 + $retryCount * 2) # 3s, 5s, 7s, 9s, 11s
+                $retryCount++
+                continue
+            }
+            
+            try {
+                if ($retryCount -gt 0) {
+                    Write-Host "Retrying solution import (attempt $($retryCount + 1) of $maxRetries)..."
+                }
+                
+                # Additional check: ensure parent directories are not locked
+                $parentDir = Split-Path $solutionFile -Parent
+                if (Test-Path $parentDir) {
+                    $testFile = Join-Path $parentDir "test_lock_$(Get-Random).tmp"
+                    try {
+                        [System.IO.File]::WriteAllText($testFile, "test")
+                        Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+                    }
+                    catch {
+                        # Silently wait and retry (reduced verbosity)
+                        # Write-Host "Parent directory appears to be locked. Waiting..." -ForegroundColor Yellow
+                        Start-Sleep -Seconds 5
+                        $retryCount++
+                        continue
+                    }
+                }
+                
+                # Build import command with optional settings file
+                if ($SettingsFile -and (Test-Path $SettingsFile)) {
+                    Write-Host "Using settings file: $SettingsFile" -ForegroundColor Cyan
+                    pac solution import --path $path --settings-file $SettingsFile
+                } else {
+                    pac solution import --path $path
+                }
+                
+                if ($LASTEXITCODE -ne 0) {
+                    throw "PAC CLI solution import failed with exit code: $LASTEXITCODE"
+                }
+                
+                $importSuccessful = $true
+                Write-Host "Solution import completed successfully." -ForegroundColor Green
+            }
+            catch {
+                $retryCount++
+                if ($retryCount -ge $maxRetries) {
+                    Write-Host "Failed to import solution after $maxRetries attempts. Error: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "This may be due to persistent file locks from background processes like CodeQL, Windows Defender, or other scanning tools." -ForegroundColor Red
+                    Write-Host "Try closing VS Code, waiting a few minutes, and running the script again." -ForegroundColor Yellow
+                    throw
+                }
+                else {
+                    $waitTime = 5 + ($retryCount * 3) # 5s, 8s, 11s, 14s
+                    Write-Host "Solution import failed (attempt $retryCount of $maxRetries). Waiting $waitTime seconds before retry..." -ForegroundColor Yellow
+                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Gray
+                    Start-Sleep -Seconds $waitTime
+                }
+            }
+        }
+    }
+    else {
+        # Import with upgrade flag (stage and upgrade)
+        Write-Host "Importing solution with upgrade mode (will delete removed components)..." -ForegroundColor Yellow
+        try {
+            # Build import command with optional settings file
+            # The --stage-and-upgrade flag handles both staging and applying the upgrade in one step
+            $importCmd = "pac solution import --path `"$path`" --stage-and-upgrade"
+            if ($SettingsFile -and (Test-Path $SettingsFile)) {
+                Write-Host "Using settings file: $SettingsFile" -ForegroundColor Cyan
+                $importCmd += " --settings-file `"$SettingsFile`""
+            }
+            
+            Invoke-Expression $importCmd
+            
+            if ($LASTEXITCODE -ne 0) {
+                throw "PAC CLI solution upgrade failed with exit code: $LASTEXITCODE"
+            }
+            
+            Write-Host "Solution upgrade completed successfully." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "Failed to import/upgrade solution. Error: $($_.Exception.Message)" -ForegroundColor Red
+            throw
+        }
+    }
+    # pac solution import --path $path -up
+    # pac solution import --path $path --force-overwrite # will overwrite unamanged changes (not recommended)
+    # use -cm to convert unmanaged components to managed
+    # pac solution upgrade --path $path
+
+    Set-Location $originalDir
+}
+
+
+function Sync-Module {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionPath
+    )
+
+    $originalDir = Get-Location
+
+    Write-Host ""
+    Write-Host "Synchronizing $SolutionPath ..."
+    Set-Location $SolutionPath
+    pac solution sync
+    
+    if ($LASTEXITCODE -ne 0) {
+        Set-Location $originalDir
+        throw "Failed to synchronize solution at: $SolutionPath"
+    }
+
+    Set-Location $originalDir
+}
+
+function Connect-PBI {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey
+    )
+
+    Install-Module -Name MicrosoftPowerBIMgmt -AllowClobber -Scope CurrentUser # -force
+    Import-Module MicrosoftPowerBIMgmt
+    Import-Module MicrosoftPowerBIMgmt.Profile
+
+    $envConfig = Get-EnvironmentConfiguration($envKey)
+    $credential = New-Object -TypeName System.Management.Automation.PSCredential -argumentlist $envConfig.Username, $envConfig.Cred
+    Connect-PowerBIServiceAccount -Credential $credential
+}
+
+function New-PBIWorkspace {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceName
+    )
+    # . "$PSScriptRoot\Util.ps1"
+
+    # https://martinschoombee.com/2020/09/15/automating-power-bi-deployments-a-series/
+
+    # Install-Module -Name MicrosoftPowerBIMgmt -AllowClobber -Scope CurrentUser
+    # Import-Module MicrosoftPowerBIMgmt
+    # Import-Module MicrosoftPowerBIMgmt.Profile
+
+    $envConfig = Get-EnvironmentConfiguration($envKey)
+
+    $WorkspaceObject = Get-PowerBIWorkspace -Scope Organization -Name $WorkspaceName -WarningAction SilentlyContinue -ErrorAction Stop
+    if ($WorkspaceObject.Count -eq 0) {
+        Write-Host "Creating Power BI Workspace ${WorkspaceName}..."
+        $WorkspaceObject = New-PowerBIWorkspace -Name $WorkspaceName
+    }
+    else {
+        if ($WorkspaceObject.State -eq "Deleted") { 
+            Write-Host "Restoring Power BI Workspace"
+            #Workspace is in a deleted state 
+            #Restore workspace 
+            Restore-PowerBIWorkspace -Id $WorkspaceObject.Id -RestoredName $WorkspaceName -AdminUserPrincipalName $envConfig.Username
+        }
+        else {
+            Write-Host "Power BI Workspace already exists"
+        }
+    }
+
+    return $WorkspaceObject
+}
+
+function Deploy-PBIReports {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ReportsPath
+    )
+
+    Write-Host ""
+    $confirm = Read-Host "Deploy reports to ${WorkspaceName} Power BI workspace?"
+    if ($confirm -ne "y") {
+        return
+    }
+
+    # Get all files in the directory
+    Get-ChildItem -Path $ReportsPath -File | ForEach-Object {
+        $PbixFilePath = $_.FullName
+        $ReportName = $_.BaseName
+        Write-Host "Deploying ${ReportName} to ${WorkspaceName}..."
+        Deploy-PBIReport $envKey $WorkspaceName $ReportName $PbixFilePath
+    }
+}
+function Deploy-PBIReport {
+
+    param(
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ReportName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PbixFilePath
+    )
+
+    # New-PBIWorkspace $envKey $WorkspaceName
+    $PBIWorkspace = (Get-PowerBIWorkspace -Scope Organization -Name $WorkspaceName)
+    New-PowerBIReport -Workspace $PBIWorkspace -Path $PbixFilePath -Name $ReportName -ConflictAction CreateOrOverwrite
+}
+
+function Update-PBIReportParameter {
+    param(
+
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ReportName,
+
+        # for update multiple at one time
+        # [Parameter(Mandatory = $true)]
+        # [PSCustomObject]$Parameters
+
+        [Parameter(Mandatory = $true)]
+        [string]$ParamName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ParamValue
+    )
+
+    $PBIWorkspace = (Get-PowerBIWorkspace -Scope Organization -Name $WorkspaceName)
+    $PBIWorkspaceId = $PBIWorkspace.Id
+    
+    $PBIReport = Get-PowerBIReport -WorkspaceId $PBIWorkspaceId -Name $ReportName
+    $DatasetId = $PBIReport.DatasetId
+
+    $uri = "groups/$($PBIWorkspaceId)/datasets/$($DatasetId)/Default.UpdateParameters"
+
+    # update multiple at one time:
+    # $updateDetailsArray = @()
+    # foreach ($param in $Parameters) {
+    #     $updateDetailsArray += @{
+    #         name     = $param.name
+    #         newValue = $param.newValue
+    #     }
+    # }
+    # $body = @{
+    #     updateDetails = $updateDetailsArray
+    # } | ConvertTo-Json
+
+    $body = @{
+        updateDetails = @(
+            @{
+                name     = $ParamName
+                newValue = $ParamValue
+            }
+        )
+    } | ConvertTo-Json
+
+    Invoke-PowerBIRestMethod -Url $uri -Method Post -Body $body
+}
+
+# Function to get all subsites for a given site
+function Get-SPOSubWebs($web) {
+    Write-Host "Site: $($web.URL)"
+    $webs = $web.Webs
+    Write-Host $webs
+}
+
+function Connect-SharePoint {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$siteURL
+    )
+
+    $envConfig = Get-EnvironmentConfiguration($envKey)
+    $creds = New-Object System.Management.Automation.PSCredential ($envConfig.Username, $envConfig.Cred)
+
+    try {
+        Connect-PnPOnline -Url $siteURL -Credentials $creds
+    }
+    catch {
+        Register-PnPManagementShellAccess
+        Connect-PnPOnline -Url $siteURL -Credentials $creds
+    }
+}
+
+function New-SharePointSite {
+
+    param(
+
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$title,
+
+        [Parameter(Mandatory = $true)]
+        [string]$timeZoneDescription
+    )
+
+    $envConfig = Get-EnvironmentConfiguration($envKey)
+
+    $domain = $envConfig.Domain
+    $sharePointAdminURL = "https://${domain}-admin.sharepoint.com"
+    Connect-SharePoint $envKey $sharePointAdminURL
+
+    $alias = $title -replace "\s", ""
+    $siteUrl = "https://${domain}.sharepoint.com/sites/" + $alias
+
+    try {
+        $site = Get-PnPTenantSite -Url $siteUrl -ErrorAction Stop
+        if ($site) {
+            Write-Host "Site exists."
+        }
+    }
+    catch {
+        Write-Host "Site does not exist, creating..."
+        $siteURL = New-PnPSite -Type TeamSite -Title $title -Alias $alias
+    }
+
+    Connect-SharePoint $envKey $siteURL
+    Update-SharePointTimeZone $siteURL $timeZoneDescription
+
+    return $siteURL
+}
+
+function Install-Required {
+    # Install-PackageProvider -Name nuget -MinimumVersion 2.8.5.201 -force -Scope CurrentUser
+    Install-Module -Name Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser
+    Update-Module -Name Microsoft.Online.SharePoint.PowerShell
+    # Install-Module SharePointPnPPowerShellOnline -AllowClobber -Scope CurrentUser
+    # Uninstall-Module -Name SharePointPnPPowerShellOnline -AllVersions -Force 
+    Install-Module PnP.PowerShell -AllowClobber -Scope CurrentUser
+    # Install-Module -Name "PnP.PowerShell" -RequiredVersion 1.12.0 -Force -AllowClobber -Scope CurrentUser
+}
+
+function Import-Required {
+    # Import-Module Microsoft.Online.SharePoint.Powershell -DisableNameChecking
+    Import-Module PnP.PowerShell
+}
+
+function Import-ExcelAsSharePointList {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$envKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$sharePointURL,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExcelPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ListName
+    )
+
+    Connect-SharePoint $envKey $sharePointURL
+
+    # Open Excel and get the first worksheet in the first workbook
+    $excel = New-Object -ComObject Excel.Application
+    $workbook = $excel.Workbooks.Open($ExcelPath)
+    $worksheet = $workbook.Worksheets.Item(1)
+    $range = $worksheet.UsedRange
+
+    # Create the list
+    $siteListName = $ListName -replace "\s", ""
+    New-PnPList -Title $ListName -Url "Lists/${siteListName}" -Template GenericList
+
+    # Get the list
+    $list = Get-PnPList -Identity $ListName
+
+    # Add fields to the list based on the Excel columns
+    for ($i = 1; $i -le $range.Columns.Count; $i++) {
+        $header = $range.Cells.Item(1, $i).Value2
+        if ($header -ne 'ID' -and $header -ne 'Title') {
+            if ($header -match "\[Date\]$") {
+                $fieldName = ($header -replace "\[Date\]$", "").Trim()
+                Add-PnPField -List $list -DisplayName $fieldName -InternalName $fieldName -Type DateTime
+            }
+            elseif ($header -match "\[Choice\]$") {
+                $fieldName = ($header -replace "\[Choice\]$", "").Trim()
+                Add-PnPField -List $list -DisplayName $fieldName -InternalName $fieldName -Type Choice
+            }
+            else {
+                Add-PnPField -List $list -DisplayName $header -InternalName $header -Type Text
+            }
+        }  
+    }
+
+    # Add items to the list from the Excel file
+    for ($i = 2; $i -le $range.Rows.Count; $i++) {
+        $values = @{}
+        for ($j = 1; $j -le $range.Columns.Count; $j++) {
+
+            $header = $range.Cells.Item(1, $j).Value2
+            if ($header -match "\[Date\]$") {
+                $fieldName = ($header -replace "\[Date\]$", "").Trim()
+            }
+            elseif ($header -match "\[Choice\]$") {
+                $fieldName = ($header -replace "\[Choice\]$", "").Trim()
+            }
+            else {
+                $fieldName = $header
+            }
+            $fieldName = $fieldName -replace "\s", "_x0020_"
+
+            if ($header -match "\[Date\]$") {
+                $excelDate = $range.Cells.Item($i, $j).Value2  # For example
+                $date = [DateTime]::FromOADate($excelDate)
+                $dateUtc = $date.ToUniversalTime()
+                $value = $dateUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') # ISO 8601 format
+            }
+            else {
+                $value = $range.Cells.Item($i, $j).Value2
+            }    
+
+            if ($header -ne 'ID') {
+                $values.Add($fieldName, $value)
+            }
+        }
+        Add-PnPListItem -List $list -Values $values
+    }
+
+    # Close Excel
+    $excel.Quit()
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+
+}
+
+function Add-ViewToSharePointList {
+    param(
+        [Parameter(Mandatory = $true)] [string] $siteUrl,
+        [Parameter(Mandatory = $true)] [string] $listName,
+        [Parameter(Mandatory = $true)] [string] $viewName,
+        [Parameter(Mandatory = $true)] [string[]] $fields
+    )
+
+    # Connect to the SharePoint site
+    Connect-SharePoint $envKey $sharePointURL
+    # Connect-PnPOnline -Url $siteUrl -UseWebLogin
+
+    # Create the view
+    Add-PnPView -List $listName -Title $viewName -Fields $fields
+}
+
+function Add-GroupedViewToSharePointList {
+    param(
+        [Parameter(Mandatory = $true)] [string] $siteUrl,
+        [Parameter(Mandatory = $true)] [string] $listName,
+        [Parameter(Mandatory = $true)] [string] $viewName,
+        [Parameter(Mandatory = $true)] [string[]] $fields,
+        [Parameter(Mandatory = $true)] [string] $groupByField
+    )
+
+    # Check if already connected to SharePoint Online
+    $context = Get-PnPContext
+    if ($null -eq $context) {
+        # Connect to the SharePoint site
+        Connect-PnPOnline -Url $siteUrl -UseWebLogin
+    }
+
+    # Create the view
+    Add-PnPView -List $listName -Title $viewName -Fields $fields
+
+    # Get the created view
+    $view = Get-PnPView -List $listName -Identity $viewName
+
+
+    # Get the CSOM view object
+    $csomView = [Microsoft.SharePoint.Client.ClientContext].GetMethod("CastTo").MakeGenericMethod([Microsoft.SharePoint.Client.View]).Invoke($context, $view)
+
+    # Add grouping to the view
+    $csomView.ViewQuery = "<GroupBy Collapse='TRUE'><FieldRef Name='$groupByField'/></GroupBy>"
+    $csomView.Update()
+    Invoke-PnPQuery
+}
+
+function Update-SharePointTimeZone {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SiteURL,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TimeZoneName
+    )
+
+    $web = Get-PnPWeb -Includes RegionalSettings.TimeZones
+    $Tzone = $web.RegionalSettings.TimeZones | Where-Object { $_.Description -like "*${TimeZoneName}*" }
+
+    If ($Null -ne $TimeZoneName) {
+        $web.RegionalSettings.TimeZone = $Tzone
+        $web.Update()
+        Invoke-PnPQuery
+        Write-host "Timezone is Successfully Updated " -ForegroundColor Green
+    }
+    else {
+        Write-host "Can't Find Timezone $TimezoneName " -ForegroundColor Red
+    }
+}
+
+function New-SharePointCalendarView {
+
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$url,
+
+        [Parameter(Mandatory = $true)]
+        [string]$listName
+    )
+
+    $newViewTitle = "Calendar View" #Change if you require a different View name
+
+    $viewCreationJson = @"
+{
+    "parameters": {
+        "__metadata": {
+            "type": "SP.ViewCreationInformation"
+        },
+        "Title": "$newViewTitle",
+        "ViewFields": {
+            "__metadata": {
+                "type": "Collection(Edm.String)"
+            },
+            "results": [
+                "Start_x0020_Date",
+                "End_x0020_Date",
+                "Title"
+            ]
+        },
+        "ViewTypeKind": 1,
+        "ViewType2": "MODERNCALENDAR",
+        "ViewData": "<FieldRef Name=\"Title\" Type=\"CalendarMonthTitle\" /><FieldRef Name=\"Title\" Type=\"CalendarWeekTitle\" /><FieldRef Name=\"Title\" Type=\"CalendarWeekLocation\" /><FieldRef Name=\"Title\" Type=\"CalendarDayTitle\" /><FieldRef Name=\"Title\" Type=\"CalendarDayLocation\" />",
+        "CalendarViewStyles": "<CalendarViewStyle Title=\"Day\" Type=\"day\" Template=\"CalendarViewdayChrome\" Sequence=\"1\" Default=\"FALSE\" /><CalendarViewStyle Title=\"Week\" Type=\"week\" Template=\"CalendarViewweekChrome\" Sequence=\"2\" Default=\"FALSE\" /><CalendarViewStyle Title=\"Month\" Type=\"month\" Template=\"CalendarViewmonthChrome\" Sequence=\"3\" Default=\"TRUE\" />",
+        "Query": "",
+        "Paged": true,
+        "PersonalView": false,
+        "RowLimit": 0
+    }
+}
+"@
+
+    Invoke-PnPSPRestMethod -Method Post -Url "$url/_api/web/lists/GetByTitle('$listname')/Views/Add" -ContentType "application/json;odata=verbose" -Content $viewCreationJson
+
+    #Optional Commands
+    Set-PnPList -Identity $listname -ListExperience NewExperience # Set list experience to force the list to display in Modern
+    Set-PnPView -List $listname -Identity $newViewTitle -Values @{DefaultView = $true; MobileView = $true; MobileDefaultView = $true } #Set newly created view To Be Default
+}
+
+function New-AppRegistration {
+    
+    # Many of the automation scripts in this repo will use an app registration
+    # Use the following instructions and script to help automate this
+    # The script will prompt you for the tenant username and password in the Connect-AzureAD step
+
+    # Run in the terminal window with: ./CreateAppRegistration.ps1
+    # Be sure to look for the authentication window that pops up behind VS Code
+    # Once complete, add the information to your env_config.json
+    # Then navigate to https://admin.powerplatform.microsoft.com/environments and add the Application User
+
+    # Install modules, elevate permissions, and connect
+    Install-Module -Name AzureAD -Scope CurrentUser
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+    # prompt for credentials to the environment
+    Connect-AzureAD 
+
+    # Define app reg here (or leave as msgov)
+    $appName = "msgov"
+    $appURI = "https://msgov"
+    $appReplyURLs = @($appURI)
+
+    # Create the app
+    if (!($myApp = Get-AzureADApplication -Filter "DisplayName eq '$($appName)'" -ErrorAction SilentlyContinue)) {
+        $myApp = New-AzureADApplication -DisplayName $appName -ReplyUrls $appReplyURLs -PublicClient $false
+    }
+
+    # Register and create the secret
+    $ClientSecret = New-AzureADApplicationPasswordCredential -ObjectId $myApp.ObjectId
+    $ServicePrincipal = New-AzureADServicePrincipal -AppId $myApp.AppId
+    $ServicePrincipal | Select-Object -Property DisplayName, AppId, ObjectId
+    Write-Output "Client Secret: $($ClientSecret.Value)"
+    Write-Output "Enter this information into a env_config.json file at the root of this project"
+
+    Write-Output "Navigate to the Power Apps Environment and add the '$appName' Application User and assign a security role."
+    Write-Output "https://admin.powerplatform.microsoft.com/environments"
+
+}
+
+function Connect-DataverseTenant {
+    param(
+        [string]$authProfile
+    )
+
+    Write-Host "Selecting authentication profile..."
+
+    # Check if $authProfile is provided, otherwise prompt for it
+    if (-not $authProfile) {
+        Write-Host ""
+        pac auth list
+        $authProfile = Read-Host "Enter Tenant ID"
+        pac auth select --index $authProfile
+        
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to select authentication profile with index: $authProfile"
+        }
+    }
+    else {
+
+        # # if auth profile provided, check the config file for custom settings
+        # # else just use what was provided
+        # $config = Get-Config
+        # if ($null -ne $config -and $config.$authProfile) {
+        #     Write-Host "Using configuration override for profile."
+        #     $authProfile = $config.$authProfile
+        # }
+
+        # now connect
+        pac auth select --name $authProfile
+        
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to select authentication profile: $authProfile. Please ensure the authentication profile exists and is configured correctly."
+        }
+    }
+}
+
+function Connect-DataverseEnvironment {
+    param(
+        [string]$authProfile,
+        [string]$envName
+    )
+
+    # if auth profile provided, connect to it
+    if ($null -ne $authProfile -and "" -ne $authProfile) {
+        Connect-DataverseTenant -authProfile $authProfile
+    }
+    # else if no auth profile was provided, use the current tenant
+
+    Write-Host "Selecting environment..."
+
+    # Check if $envName is provided, otherwise prompt for it
+    if (-not $envName) {
+        Write-Host ""
+        pac org list
+        $envName = Read-Host "Enter Environment Name"
+    }
+    pac org select --environment $envName
+    
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to select environment: $envName. Please ensure the environment exists and is accessible."
+    }
+    
+    Write-Host ""
+}
+
+function Get-ModuleFromIPType {
+    param (
+        [string]$ipType
+    )
+
+    # This function is deprecated in favor of Select-ModuleWithCategory
+    # Kept for backward compatibility
+    $projectRoot = "$PSScriptRoot\.."
+    return Select-ModuleWithCategory -projectRoot $projectRoot
+}
+
+function Select-ModuleWithCategory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$projectRoot
+    )
+    
+    # Get all modules with their categories
+    $allModules = Get-AllModulePaths -projectRoot $projectRoot
+    
+    if ($allModules.Count -eq 0) {
+        Write-Host "No modules found in the repository." -ForegroundColor Red
+        return $null
+    }
+    
+    # Two-step selection: category first, then module
+    do {
+        # Step 1: Select category
+        Write-Host ""
+        Write-Host "Select a category:" -ForegroundColor Cyan
+        $categories = Get-ModuleCategories -projectRoot $projectRoot
+        $selectedCategory = Select-ItemFromList -choices $categories
+        
+        # Step 2: Select module within category (with back option)
+        Write-Host ""
+        Write-Host "Select a module in '$selectedCategory':" -ForegroundColor Cyan
+        
+        # Get modules in the selected category
+        $categoryModules = $allModules.Keys | Where-Object { $_ -like "$selectedCategory/*" } | Sort-Object
+        $moduleNames = $categoryModules | ForEach-Object { $_ -replace "^$selectedCategory/", "" }
+        
+        # Add back option at the end
+        $choicesWithBack = $moduleNames + @("(Back to categories)")
+        $selection = Select-ItemFromList -choices $choicesWithBack
+        
+        # Check if user selected back
+        if ($selection -eq "(Back to categories)") {
+            continue  # Go back to category selection
+        }
+        
+        # Return the full category/module-name format
+        return "$selectedCategory/$selection"
+        
+    } while ($true)
+}
+
+function Get-Config {
+    # Try to read the configuration file
+    try {
+        $projectRoot = "$PSScriptRoot\.."
+        $configPath = "$projectRoot\user.config"
+
+        $config = Get-Content -Path $configPath -ErrorAction Stop | ConvertFrom-Json
+    }
+    catch {
+        Write-Error "Failed to read or parse the config file at '$configPath': $_"
+        return $null
+    }
+
+    return $config
+}
+
+function Get-DeploymentConfig {
+    # Read the main deployment configuration file
+    try {
+        $projectRoot = "$PSScriptRoot\.."
+        # $configPath = "$projectRoot\config.json"
+        $configPath = "$projectRoot\.config\deployments.json"
+
+        $config = Get-Content -Path $configPath -ErrorAction Stop | ConvertFrom-Json
+        return $config
+    }
+    catch {
+        Write-Error "Failed to read or parse the deployment config file at '$configPath': $_"
+        return $null
+    }
+}
+
+function Select-Deployment {
+    # Get the deployment configuration
+    $config = Get-DeploymentConfig
+    if ($null -eq $config) {
+        throw "Unable to load deployment configuration"
+    }
+
+    # Get available deployment names
+    $deploymentNames = $config.Deployments.PSObject.Properties.Name
+
+    Write-Host ""
+    Write-Host "Available Deployments:"
+    $selectedDeployment = Select-ItemFromList $deploymentNames
+
+    return $config.Deployments.$selectedDeployment
+}# Helper functions for module-specific environment routing
+
+function Get-ModuleDevelopmentEnvironment {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$ModuleName,
+        
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$DeploymentConfig
+    )
+    
+    # Get the full config to access Modules section
+    $fullConfig = Get-DeploymentConfig
+    
+    # Get module configuration (or use default)
+    $moduleConfig = if ($fullConfig.Modules.$ModuleName) {
+        $fullConfig.Modules.$ModuleName
+    } else {
+        $fullConfig.DefaultModule
+    }
+    
+    # Use the user-selected deployment config to resolve the environment,
+    # rather than looking up the deployment by the module's hardcoded Tenant.
+    # This ensures that when the user selects e.g. "Test", the environment
+    # is resolved from the Test deployment, not always from Development.
+    $envKey = $moduleConfig.Environment
+    return $DeploymentConfig.Environments.$envKey
+}
+
+function Get-ModuleDeploymentTargets {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$ModuleName,
+        
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$DeploymentConfig
+    )
+    
+    # Get the full config to access Modules section
+    $fullConfig = Get-DeploymentConfig
+    
+    # Get module configuration (or use default)
+    $moduleConfig = if ($fullConfig.Modules.$ModuleName) {
+        $fullConfig.Modules.$ModuleName
+    } else {
+        $fullConfig.DefaultModule
+    }
+    
+    # Use the user-selected deployment config to resolve the target environments,
+    # rather than looking up the deployment by the module's hardcoded Tenant.
+    $envKeys = $moduleConfig.DeploymentTargets
+    return $envKeys | ForEach-Object { $DeploymentConfig.Environments.$_ }
+}
