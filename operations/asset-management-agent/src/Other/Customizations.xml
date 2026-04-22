@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<ImportExportXml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<ImportExportXml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" OrganizationVersion="9.2.26033.174" OrganizationSchemaType="Standard" CRMServerServiceabilityVersion="9.2.26033.00179">
   <Entities />
   <Roles />
   <Workflows />
@@ -10,8 +10,17 @@
   <OrganizationSettings />
   <optionsets />
   <CustomControls />
-  <SolutionPluginAssemblies />
   <EntityDataProviders />
+  <connectionreferences>
+    <connectionreference connectionreferencelogicalname="appbase_assetManagementAssistant.shared_commondataserviceforapps.db5f43522ca641589361e6cf0666d638">
+      <connectionreferencedisplayname>appbase_assetManagementAssistant.shared_commondataserviceforapps.db5f43522ca641589361e6cf0666d638</connectionreferencedisplayname>
+      <connectorid>/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps</connectorid>
+      <iscustomizable>0</iscustomizable>
+      <promptingbehavior>0</promptingbehavior>
+      <statecode>0</statecode>
+      <statuscode>1</statuscode>
+    </connectionreference>
+  </connectionreferences>
   <Languages>
     <Language>1033</Language>
   </Languages>
