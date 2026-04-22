@@ -1,0 +1,10 @@
+<botcomponent schemaname="appbase_assetManagementAssistant.topic.ResetConversation">
+  <componenttype>9</componenttype>
+  <iscustomizable>0</iscustomizable>
+  <name>Reset Conversation</name>
+  <parentbotid>
+    <schemaname>appbase_assetManagementAssistant</schemaname>
+  </parentbotid>
+  <statecode>0</statecode>
+  <statuscode>1</statuscode>
+</botcomponent>

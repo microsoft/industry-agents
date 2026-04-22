@@ -1,0 +1,11 @@
+<botcomponent schemaname="appbase_assetManagementAssistant.gpt.default">
+  <componenttype>15</componenttype>
+  <description>Helps users manage and interact with organizational assets by providing asset lookup, policy guidance, and workflow support for requests and maintenance.</description>
+  <iscustomizable>0</iscustomizable>
+  <name>Asset Management Assistant</name>
+  <parentbotid>
+    <schemaname>appbase_assetManagementAssistant</schemaname>
+  </parentbotid>
+  <statecode>0</statecode>
+  <statuscode>1</statuscode>
+</botcomponent>

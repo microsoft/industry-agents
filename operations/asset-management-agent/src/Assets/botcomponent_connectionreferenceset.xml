@@ -1,0 +1,5 @@
+<botcomponent_connectionreferenceset>
+  <botcomponent_connectionreference botcomponentid.schemaname="appbase_assetManagementAssistant.action.MicrosoftDataverse-MicrosoftDataverseMCPServer" connectionreferenceid.connectionreferencelogicalname="appbase_assetManagementAssistant.shared_commondataserviceforapps.db5f43522ca641589361e6cf0666d638">
+    <iscustomizable>1</iscustomizable>
+  </botcomponent_connectionreference>
+</botcomponent_connectionreferenceset>
