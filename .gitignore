@@ -17,6 +17,8 @@
 .vscode/
 .venv/
 .config
+.releases/
+.releases
 
 # Temporary and build directories
 .temp/
